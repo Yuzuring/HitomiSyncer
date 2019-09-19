@@ -2,6 +2,7 @@
 
 module Main where
 
+import Data.Functor
 import Data.Char
 import Data.Int
 import Data.Bits
@@ -97,16 +98,19 @@ data ImageInfo = ImageInfo
   deriving (Show)
 
 instance FromJSON ImageInfo where
-  parseJSON = withObject "ImageInfo" $ \v -> ImageInfo
+  parseJSON = withObject "ImageInfo" $ \v ->
+    ImageInfo
     <$> v .: "name"
     <*> v .: "width"
     <*> v .: "height"
     <*> v .: "haswebp"
 
 parseGalleryJs :: BSL.ByteString -> Maybe [ImageName]
-parseGalleryJs = parse >=> return . map (T.unpack . name)
+parseGalleryJs = fmap extract . parse
   where
-    parse = decode . (BSL.drop 18) :: BSL.ByteString -> Maybe [ImageInfo]
+    parse :: BSL.ByteString -> Maybe [ImageInfo]
+    parse = decode . BSL.drop 18
+    extract = map $ T.unpack . name
 
 -- | Resource names
 domainName :: GalleryId -> String
@@ -169,9 +173,6 @@ parseRequest' str = parseRequest (replace str)
       ']' -> "%5D" ++ replace xs
       c -> c:replace xs
 
-(=>>) :: Monad m => (a -> m b) -> m c -> a -> m c
-k =>> m = \x -> k x >> m
-
 ensureGalleryHtml :: GalleryId -> Sync Bool
 ensureGalleryHtml gid = do
   hasGalleryHtml <- liftIO $ doesFileExist (localUrl url)
@@ -184,15 +185,15 @@ ensureGalleryHtml gid = do
                              , proxy = proxySetting
                              }
       manager <- reader httpManager
-      catch (liftIO (httpLbs request manager) >>= process) (traceHttpException =>> return False)
+      catch (liftIO (httpLbs request manager) >>= process) ((False <$) . traceHttpException)
   where
     url = galleryHtmlUrl gid
     process response =
       if status == status200
-        then liftIO $ BSL.writeFile (localUrl url) body >> return True
+        then liftIO $ BSL.writeFile (localUrl url) body $> True
         else if status == status404
           then return True
-          else (traceResponseError callee response) >> return False
+          else traceResponseError callee response $> False
       where
         body = responseBody response
         status = responseStatus response
@@ -202,7 +203,7 @@ ensureGalleryJs :: GalleryId -> Sync (Maybe BSL.ByteString)
 ensureGalleryJs gid = do
   hasGalleryJs <- liftIO $ doesFileExist (localUrl url)
   if hasGalleryJs
-    then liftIO $ BSL.readFile (localUrl url) >>= return . Just
+    then liftIO $ Just <$> BSL.readFile (localUrl url)
     else do
       putStrLnStdout ("Fetching : galleryJs " ++ gid)
       _request <- parseRequest' (networkUrl url)
@@ -210,13 +211,13 @@ ensureGalleryJs gid = do
                              , proxy = proxySetting
                              }
       manager <- reader httpManager
-      catch (liftIO (httpLbs request manager) >>= process) (traceHttpException =>> return Nothing)
+      catch (liftIO (httpLbs request manager) >>= process) ((Nothing <$) . traceHttpException)
   where
     url = galleryJsUrl gid
     process response =
       if status == status200
-        then liftIO $ BSL.writeFile (localUrl url) body >> return (Just body)
-        else (traceResponseError callee response) >> return Nothing
+        then liftIO $ BSL.writeFile (localUrl url) body $> Just body
+        else traceResponseError callee response $> Nothing
       where
         body = responseBody response
         status = responseStatus response
@@ -234,13 +235,13 @@ ensureGalleryBlock gid = do
                               , proxy = proxySetting
                               }
       manager <- reader httpManager
-      catch (liftIO (httpLbs request manager) >>= process) (traceHttpException =>> return False)
+      catch (liftIO (httpLbs request manager) >>= process) ((False <$) . traceHttpException)
   where
     url = galleryBlockUrl gid
     process response = 
       if status == status200
-        then liftIO $ BSL.writeFile (localUrl url) body >> return True
-        else (traceResponseError callee response) >> return False
+        then liftIO $ BSL.writeFile (localUrl url) body $> True
+        else traceResponseError callee response $> False
       where
         body = responseBody response
         status = responseStatus response
@@ -260,14 +261,14 @@ ensureGalleryImage gid name = do
                               , responseTimeout = responseTimeoutMicro 60000000
                               }
       manager <- reader httpManager
-      tryN 5 $ catch (liftIO (httpLbs request manager) >>= process) (traceHttpException =>> return False)
+      tryN 5 $ catch (liftIO (httpLbs request manager) >>= process) ((False <$) . traceHttpException)
   where
     url = galleryImageUrl gid name
     headers = [("Referer", (fromString . networkUrl . galleryHtmlUrl) gid)]
     process response =
       if status == status200
-        then liftIO $ BSL.writeFile (localUrl url) body >> return True
-        else (traceResponseError callee response) >> return False
+        then liftIO $ BSL.writeFile (localUrl url) body $> True
+        else traceResponseError callee response $> False
       where
         body = responseBody response
         status = responseStatus response
@@ -367,11 +368,11 @@ main = do
         else return (parseNozomiText nozomi)
       
     init args = do
-      new     <- mapM parseNozomi args >>= return . concat
-      succeed <- BS.readFile "hitomi/succeed" >>= return . S.fromList . parseNozomiText
-      failed  <- BS.readFile "hitomi/failed"  >>= return . S.fromList . parseNozomiText
+      new     <- concat <$> mapM parseNozomi args
+      succeed <- S.fromList . parseNozomiText <$> BS.readFile "hitomi/succeed"
+      failed  <- S.fromList . parseNozomiText <$> BS.readFile "hitomi/failed"
       let pass x = not (S.member x succeed || S.member x failed)
-      return [show gid | gid <- new, pass gid]
+      return . map show . filter pass $ new
 
     loop environment tasks [] = do
       mapM_ A.wait tasks

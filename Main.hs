@@ -51,42 +51,35 @@ parseNozomiText bs = ints where
 -- | Sync monad
 data SyncEnvironment =
   SyncEnvironment
-  { _stdoutSem  :: TSem
-  , _succeedSem :: TSem
-  , _failedSem  :: TSem
-  , _hSucceed :: Handle
-  , _hFailed  :: Handle
-  , _httpManager :: Manager
+  { stdoutSem  :: TSem
+  , succeedSem :: TSem
+  , failedSem  :: TSem
+  , hSucceed :: Handle
+  , hFailed  :: Handle
+  , httpManager :: Manager
   }
 
 type Sync = ReaderT SyncEnvironment IO
 
-readStdoutSem   = reader _stdoutSem
-readSucceedSem  = reader _succeedSem
-readFailedSem   = reader _failedSem
-readHSucceed    = reader _hSucceed
-readHFailed     = reader _hFailed
-readHttpManager = reader _httpManager
-
 putStrLnStdout :: String -> Sync ()
 putStrLnStdout str = do
-  sem <- readStdoutSem
+  sem <- reader stdoutSem
   liftIO . atomically . waitTSem $ sem
   liftIO . putStrLn $ str
   liftIO . atomically . signalTSem $ sem
 
 putStrLnSucceed :: String -> Sync ()
 putStrLnSucceed str = do
-  sem <- readSucceedSem
-  handle <- readHSucceed
+  sem <- reader succeedSem
+  handle <- reader hSucceed
   liftIO . atomically . waitTSem $ sem
   liftIO $ hPutStrLn handle str
   liftIO . atomically . signalTSem $ sem
 
 putStrLnFailed :: String -> Sync ()
 putStrLnFailed str = do
-  sem <- readFailedSem
-  handle <- readHFailed
+  sem <- reader failedSem
+  handle <- reader hFailed
   liftIO . atomically . waitTSem $ sem
   liftIO $ hPutStrLn handle str
   liftIO . atomically . signalTSem $ sem
@@ -190,7 +183,7 @@ ensureGalleryHtml gid = do
       let request = _request { requestVersion = http11
                              , proxy = proxySetting
                              }
-      manager <- readHttpManager
+      manager <- reader httpManager
       catch (liftIO (httpLbs request manager) >>= process) (traceHttpException =>> return False)
   where
     url = galleryHtmlUrl gid
@@ -216,7 +209,7 @@ ensureGalleryJs gid = do
       let request = _request { requestVersion = http11
                              , proxy = proxySetting
                              }
-      manager <- readHttpManager
+      manager <- reader httpManager
       catch (liftIO (httpLbs request manager) >>= process) (traceHttpException =>> return Nothing)
   where
     url = galleryJsUrl gid
@@ -240,7 +233,7 @@ ensureGalleryBlock gid = do
       let request = _request  { requestVersion = http11
                               , proxy = proxySetting
                               }
-      manager <- readHttpManager
+      manager <- reader httpManager
       catch (liftIO (httpLbs request manager) >>= process) (traceHttpException =>> return False)
   where
     url = galleryBlockUrl gid
@@ -266,7 +259,7 @@ ensureGalleryImage gid name = do
                               , proxy = proxySetting
                               , responseTimeout = responseTimeoutMicro 60000000
                               }
-      manager <- readHttpManager
+      manager <- reader httpManager
       tryN 5 $ catch (liftIO (httpLbs request manager) >>= process) (traceHttpException =>> return False)
   where
     url = galleryImageUrl gid name
@@ -340,26 +333,26 @@ main = do
     else do
       gids <- init args
 
-      stdoutSem  <- atomically $ newTSem 1
-      succeedSem <- atomically $ newTSem 1
-      failedSem  <- atomically $ newTSem 1
+      _stdoutSem  <- atomically $ newTSem 1
+      _succeedSem <- atomically $ newTSem 1
+      _failedSem  <- atomically $ newTSem 1
 
-      hSucceed <- openFile "hitomi/succeed" AppendMode
-      hFailed  <- openFile "hitomi/failed"  AppendMode
+      _hSucceed <- openFile "hitomi/succeed" AppendMode
+      _hFailed  <- openFile "hitomi/failed"  AppendMode
 
-      hSetBuffering hSucceed LineBuffering
-      hSetBuffering hFailed  LineBuffering
+      hSetBuffering _hSucceed LineBuffering
+      hSetBuffering _hFailed  LineBuffering
 
-      manager <- newManager tlsManagerSettings
+      _httpManager <- newManager tlsManagerSettings
 
       let environment =
             SyncEnvironment
-            { _stdoutSem    = stdoutSem
-            , _succeedSem   = succeedSem
-            , _failedSem    = failedSem
-            , _hSucceed     = hSucceed
-            , _hFailed      = hFailed
-            , _httpManager  = manager
+            { stdoutSem    = _stdoutSem
+            , succeedSem   = _succeedSem
+            , failedSem    = _failedSem
+            , hSucceed     = _hSucceed
+            , hFailed      = _hFailed
+            , httpManager  = _httpManager
             }
 
       loop environment [] gids
@@ -382,8 +375,8 @@ main = do
 
     loop environment tasks [] = do
       mapM_ A.wait tasks
-      hClose (_hSucceed environment)
-      hClose (_hFailed  environment)
+      hClose (hSucceed environment)
+      hClose (hFailed  environment)
 
     loop environment tasks gids =
       if length tasks < asyncNum

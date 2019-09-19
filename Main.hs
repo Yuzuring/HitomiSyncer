@@ -332,7 +332,7 @@ main = do
   if length args == 0
     then putStrLn "Please specify the nozomi file"
     else do
-      gids <- init args
+      gids <- loadNozomi args
 
       _stdoutSem  <- atomically $ newTSem 1
       _succeedSem <- atomically $ newTSem 1
@@ -367,7 +367,7 @@ main = do
         then return (parseNozomiBinary nozomi)
         else return (parseNozomiText nozomi)
       
-    init args = do
+    loadNozomi args = do
       new     <- concat <$> mapM parseNozomi args
       succeed <- S.fromList . parseNozomiText <$> BS.readFile "hitomi/succeed"
       failed  <- S.fromList . parseNozomiText <$> BS.readFile "hitomi/failed"
